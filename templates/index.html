@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini SOC AI - Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { padding: 20px; background-color: #f8f9fa; }
+        .card { margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,.1); }
+        .badge { font-size: 0.9em; }
+        .table-hover tbody tr:hover { background-color: rgba(0,0,0,.075); }
+        #eventsTable th { background-color: #343a40; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-dark text-white">
+                        <h1 class="h4 mb-0">🛡️ Mini SOC AI - Dashboard Live</h1>
+                        <small>Powered by LM Studio (Gemma 3 4B)</small>
+                    </div>
+                    <div class="card-body">
+                        <div class="row mb-4">
+                            <div class="col-md-4">
+                                <div class="card text-white bg-primary">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Événements Totaux</h5>
+                                        <h2 id="totalEvents" class="card-text">0</h2>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card text-white bg-warning">
+                                    <div class="card-body">
+                                        <h5 class="card-title">IPs Bloquées</h5>
+                                        <h2 id="blockedIPs" class="card-text">0</h2>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card text-white bg-danger">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Menaces Haute Sévérité</h5>
+                                        <h2 id="highThreats" class="card-text">0</h2>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-8">
+                                <div class="card">
+                                    <div class="card-header bg-secondary text-white">
+                                        <h5 class="mb-0">Événements en Temps Réel</h5>
+                                    </div>
+                                    <div class="card-body" style="max-height: 400px; overflow-y: auto;">
+                                        <table class="table table-hover table-sm" id="eventsTable">
+                                            <thead>
+                                                <tr>
+                                                    <th>ID</th>
+                                                    <th>Type</th>
+                                                    <th>IP Source</th>
+                                                    <th>Heure</th>
+                                                    <th>Sévérité</th>
+                                                    <th>Catégorie</th>
+                                                    <th>Action</th>
+                                                    <th>État</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="eventsBody">
+                                                <tr id="noEvents">
+                                                    <td colspan="8" class="text-center text-muted">
+                                                        En attente d'événements...
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card">
+                                    <div class="card-header bg-info text-white">
+                                        <h5 class="mb-0">Statistiques</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <canvas id="chart" width="300" height="250"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-footer text-muted">
+                        Dernière mise à jour: <span id="lastUpdate">--:--:--</span>
+                        <span id="connectionStatus" class="badge bg-secondary ms-2">Déconnecté</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io('http://127.0.0.1:5000', {
+            transports: ['websocket', 'polling']
+        });
+
+        let chart = null;
+        let eventsData = [];
+
+        socket.on('connect', () => {
+            console.log('Connecté au dashboard');
+            document.getElementById('connectionStatus').className = 'badge bg-success ms-2';
+            document.getElementById('connectionStatus').textContent = 'Connecté';
+            updateTime();
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Déconnecté du dashboard');
+            document.getElementById('connectionStatus').className = 'badge bg-danger ms-2';
+            document.getElementById('connectionStatus').textContent = 'Déconnecté';
+        });
+
+        socket.on('update', (data) => {
+            console.log('Données reçues:', data.events.length, 'événements');
+            eventsData = data.events;
+            updateTime();
+            updateTable(eventsData);
+            updateStats(eventsData);
+            updateChart(eventsData);
+        });
+
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('lastUpdate').textContent = 
+                now.toLocaleTimeString('fr-FR');
+        }
+
+        function updateTable(events) {
+            const tbody = document.getElementById('eventsBody');
+            
+            if (events.length === 0) {
+                document.getElementById('noEvents').style.display = '';
+                tbody.innerHTML = '<tr id="noEvents"><td colspan="8" class="text-center text-muted">En attente d\'événements...</td></tr>';
+                return;
+            }
+            
+            document.getElementById('noEvents').style.display = 'none';
+            tbody.innerHTML = '';
+            
+            events.forEach(e => {
+                const row = document.createElement('tr');
+                
+                let severityColor = 'secondary';
+                if (e[4] === 'High') severityColor = 'danger';
+                else if (e[4] === 'Medium') severityColor = 'warning';
+                else if (e[4] === 'Low') severityColor = 'success';
+                
+                let actionColor = 'secondary';
+                if (e[7] === 'blocked') actionColor = 'danger';
+                else if (e[7] === 'ticket_created') actionColor = 'warning';
+                else if (e[7] === 'ignored') actionColor = 'info';
+                
+                let timeStr = '-';
+                if (e[3]) {
+                    const date = new Date(e[3]);
+                    timeStr = date.toLocaleTimeString('fr-FR');
+                }
+                
+                row.innerHTML = `
+                    <td>${e[0] || '-'}</td>
+                    <td><span class="badge bg-dark">${e[1] || '-'}</span></td>
+                    <td><code class="font-monospace">${e[2] || '-'}</code></td>
+                    <td>${timeStr}</td>
+                    <td><span class="badge bg-${severityColor}">${e[4] || '-'}</span></td>
+                    <td><span class="badge bg-primary">${e[5] || '-'}</span></td>
+                    <td><span class="badge bg-dark">${e[6] || '-'}</span></td>
+                    <td><span class="badge bg-${actionColor}">${e[7] || 'pending'}</span></td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function updateStats(events) {
+            document.getElementById('totalEvents').textContent = events.length;
+            
+            const blocked = events.filter(e => e[7] === 'blocked').length;
+            document.getElementById('blockedIPs').textContent = blocked;
+            
+            const high = events.filter(e => e[4] === 'High').length;
+            document.getElementById('highThreats').textContent = high;
+        }
+
+        function updateChart(events) {
+            const ctx = document.getElementById('chart').getContext('2d');
+            
+            const categories = {};
+            events.forEach(e => {
+                const cat = e[5] || 'unknown';
+                categories[cat] = (categories[cat] || 0) + 1;
+            });
+            
+            const labels = Object.keys(categories);
+            const data = Object.values(categories);
+            
+            const colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'];
+            
+            if (chart) {
+                chart.data.labels = labels;
+                chart.data.datasets[0].data = data;
+                chart.update();
+            } else {
+                chart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: data,
+                            backgroundColor: colors,
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            },
+                            title: {
+                                display: true,
+                                text: 'Répartition par Catégorie'
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+
+        fetch('/api/events')
+            .then(response => response.json())
+            .then(events => {
+                eventsData = events;
+                updateTable(eventsData);
+                updateStats(eventsData);
+                updateChart(eventsData);
+            })
+            .catch(error => {
+                console.error('Erreur lors du chargement initial:', error);
+            });
+
+
+        updateTime();
+        
+
+        window.testEvent = function() {
+            fetch('http://127.0.0.1:6001/events', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer SECRET_TOKEN_SOC123',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    event_id: 'test-' + Date.now(),
+                    type: 'ssh_failed',
+                    src_ip: '192.168.1.' + Math.floor(Math.random() * 255),
+                    timestamp: new Date().toISOString(),
+                    details: 'Failed password for test user from random IP'
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Événement test envoyé:', data);
+                alert('Événement test envoyé !');
+            })
+            .catch(error => {
+                console.error('Erreur:', error);
+                alert('Erreur: ' + error);
+            });
+        };
+    </script>
+</body>
+</html>
